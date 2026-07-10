@@ -65,9 +65,47 @@ def extract(req: InvoiceRequest):
 
     # ---------------- Vendor ----------------
 
-    m = re.search(r"Vendor\s*:\s*(.+)", text, re.I)
-    if m:
-        vendor = m.group(1).strip()
+    # ---------------- Vendor ----------------
+
+    vendor = None
+    
+    vendor_patterns = [
+        r"Vendor\s*:\s*(.+)",
+        r"Supplier\s*:\s*(.+)",
+        r"Seller\s*:\s*(.+)",
+        r"Company\s*:\s*(.+)",
+        r"Bill\s+From\s*:\s*(.+)",
+        r"From\s*:\s*(.+)",
+    ]
+    
+    for p in vendor_patterns:
+        m = re.search(p, text, re.I)
+        if m:
+            vendor = m.group(1).strip()
+            break
+    
+    # fallback: company name at top of invoice
+    if vendor is None:
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        ignore = (
+            "invoice",
+            "invoice no",
+            "invoice #",
+            "date",
+            "subtotal",
+            "total",
+            "gst",
+            "tax",
+            "amount",
+            "bill to",
+            "ship to",
+        )
+    
+        for line in lines[:6]:
+            lower = line.lower()
+            if ":" not in line and not any(lower.startswith(x) for x in ignore):
+                vendor = line
+                break
 
     # ---------------- Date ----------------
 

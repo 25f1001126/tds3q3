@@ -35,16 +35,26 @@ def extract_invoice(text):
 
     # ---------------- Invoice Number ----------------
 
-    patterns = [
-        r"Invoice\s*(?:No|Number)?\s*[:#]?\s*([A-Za-z0-9\-\/]+)",
-        r"Ref\s*[:#]?\s*([A-Za-z0-9\-\/]+)",
+    invoice_patterns = [
+    r"Invoice\s*(?:No|Number)\s*[:#]?\s*([A-Za-z0-9\-\/]+)",
+    r"Invoice\s*#\s*([A-Za-z0-9\-\/]+)",
+    r"Ref(?:erence)?\s*[:#]?\s*([A-Za-z0-9\-\/]+)",
     ]
-
-    for p in patterns:
-        m = re.search(p, text, re.I)
+    
+    for pat in invoice_patterns:
+        m = re.search(pat, text, re.I)
         if m:
             result["invoice_no"] = m.group(1).strip()
             break
+    
+    # Fallback: first token that looks like an invoice number
+    if result["invoice_no"] is None:
+        m = re.search(
+            r"\b[A-Z]{1,6}-\d{2,4}-\d+\b",
+            text
+        )
+        if m:
+            result["invoice_no"] = m.group(0)
 
     # ---------------- Date ----------------
 

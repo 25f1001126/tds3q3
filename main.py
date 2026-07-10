@@ -35,10 +35,13 @@ def extract_invoice(text):
 
     # ---------------- Invoice Number ----------------
 
+    # ---------------- Invoice Number ----------------
+
     invoice_patterns = [
-    r"Invoice\s*(?:No|Number)\s*[:#]?\s*([A-Za-z0-9\-\/]+)",
-    r"Invoice\s*#\s*([A-Za-z0-9\-\/]+)",
-    r"Ref(?:erence)?\s*[:#]?\s*([A-Za-z0-9\-\/]+)",
+        r"Invoice\s*(?:No|Number|ID)?\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9/\-]*)",
+        r"Invoice\s*#\s*([A-Za-z0-9][A-Za-z0-9/\-]*)",
+        r"Ref(?:erence)?\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9/\-]*)",
+        r"Document\s*(?:No|ID)?\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9/\-]*)",
     ]
     
     for pat in invoice_patterns:
@@ -47,14 +50,22 @@ def extract_invoice(text):
             result["invoice_no"] = m.group(1).strip()
             break
     
-    # Fallback: first token that looks like an invoice number
+    # Generic fallback: anything that looks like an invoice id
     if result["invoice_no"] is None:
-        m = re.search(
-            r"\b[A-Z]{1,6}-\d{2,4}-\d+\b",
+        candidates = re.findall(
+            r"\b[A-Za-z0-9]+(?:[-/][A-Za-z0-9]+){2,}\b",
             text
         )
-        if m:
-            result["invoice_no"] = m.group(0)
+    
+        blacklist = {
+            "yyyy-mm-dd",
+            "dd-mm-yyyy",
+        }
+    
+        for c in candidates:
+            if c.lower() not in blacklist:
+                result["invoice_no"] = c
+                break
 
     # ---------------- Date ----------------
 

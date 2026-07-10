@@ -1,5 +1,27 @@
-import re
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from dateutil import parser
+import re
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class InvoiceRequest(BaseModel):
+    invoice_text: str
+
+
+def num(s):
+    return float(s.replace(",", "").strip())
+
 
 def extract_invoice(text):
     result = {
@@ -11,11 +33,13 @@ def extract_invoice(text):
         "currency": None,
     }
 
-    # ---------------- Invoice number ----------------
+    # ---------------- Invoice Number ----------------
+
     patterns = [
         r"Invoice\s*(?:No|Number)?\s*[:#]?\s*([A-Za-z0-9\-\/]+)",
         r"Ref\s*[:#]?\s*([A-Za-z0-9\-\/]+)",
     ]
+
     for p in patterns:
         m = re.search(p, text, re.I)
         if m:
@@ -23,6 +47,7 @@ def extract_invoice(text):
             break
 
     # ---------------- Date ----------------
+
     date_patterns = [
         r"Date\s*[:\-]?\s*(.+)",
         r"Issued\s*[:\-]?\s*(.+)",
@@ -39,11 +64,14 @@ def extract_invoice(text):
                 pass
 
     # ---------------- Vendor ----------------
+
     vendor_patterns = [
         r"Vendor\s*:\s*(.+)",
         r"Supplier\s*:\s*(.+)",
         r"Seller\s*:\s*(.+)",
         r"From\s*:\s*(.+)",
+        r"Company\s*:\s*(.+)",
+        r"Business\s*:\s*(.+)",
     ]
 
     for p in vendor_patterns:
@@ -52,43 +80,68 @@ def extract_invoice(text):
             result["vendor"] = m.group(1).strip()
             break
 
-    # Fallback: first non-empty line that isn't INVOICE/TAX INVOICE
+    # Fallback: first meaningful line
     if result["vendor"] is None:
         for line in text.splitlines():
             line = line.strip()
+
             if not line:
                 continue
-            if line.upper() in ["INVOICE", "TAX INVOICE"]:
+
+            low = line.lower()
+
+            if any(x in low for x in [
+                "invoice",
+                "bill to",
+                "client",
+                "subtotal",
+                "total",
+                "gst",
+                "igst",
+                "cgst",
+                "sgst",
+                "currency",
+                "date",
+                "issued",
+                "ref",
+            ]):
                 continue
-            if "invoice" in line.lower():
-                continue
+
             result["vendor"] = line
             break
 
     # ---------------- Currency ----------------
+
     m = re.search(r"Currency\s*:\s*([A-Z]{3})", text, re.I)
     if m:
-        result["currency"] = m.group(1)
+        result["currency"] = m.group(1).upper()
     elif "Rs" in text or "₹" in text:
         result["currency"] = "INR"
-
-    # helper
-    def num(s):
-        return float(s.replace(",", ""))
+    elif "$" in text:
+        result["currency"] = "USD"
 
     # ---------------- Amount (Subtotal) ----------------
-    m = re.search(r"Subtotal.*?([\d,]+\.\d+)", text, re.I)
-    if m:
-        result["amount"] = num(m.group(1))
+
+    subtotal_patterns = [
+        r"Subtotal.*?([\d,]+\.\d+)",
+        r"Sub\s*Total.*?([\d,]+\.\d+)",
+        r"Amount Before Tax.*?([\d,]+\.\d+)",
+    ]
+
+    for p in subtotal_patterns:
+        m = re.search(p, text, re.I | re.S)
+        if m:
+            result["amount"] = num(m.group(1))
+            break
 
     # ---------------- Tax ----------------
+
     tax = 0.0
 
-    # Sum ALL GST/CGST/SGST/IGST/VAT lines
     for m in re.finditer(
-        r"(?:CGST|SGST|IGST|GST|VAT)[^\d]*([\d,]+\.\d+)",
+        r"(?:CGST|SGST|IGST|GST|VAT).*?([\d,]+\.\d+)",
         text,
-        re.I,
+        re.I | re.S,
     ):
         tax += num(m.group(1))
 
@@ -96,3 +149,13 @@ def extract_invoice(text):
         result["tax"] = tax
 
     return result
+
+
+@app.post("/extract")
+def extract(req: InvoiceRequest):
+    return extract_invoice(req.invoice_text)
+
+
+@app.get("/")
+def root():
+    return {"status": "ok"}

@@ -1,7 +1,6 @@
 import re
 from datetime import datetime
 from typing import Optional
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -17,50 +16,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 class InvoiceIn(BaseModel):
     invoice_text: str
-
 
 def clean_number(raw: str) -> Optional[float]:
     if raw is None:
         return None
-    raw = raw.strip().rstrip(".,")
+    # Ensure raw is a string before calling strip
+    raw = str(raw).strip().rstrip(".,")
     raw = raw.replace(",", "")
     try:
         return round(float(raw), 2)
     except ValueError:
         return None
 
-
 NUM = r'([\d,]+\.\d{1,2}|[\d,]+)'
 CUR_PREFIX = r'(?:Rs\.?|INR|₹|\$|USD|EUR|€|GBP|£)?'
 
-
 def find_number(text: str, keywords: str) -> Optional[float]:
-    # Ensure the keyword is followed by separators and then the number
-    # This prevents matching percentages or item-level numbers
+    # Use non-capturing group for the prefix to avoid extra items in the tuple
     pattern = rf'(?:{keywords})(?:[^0-9\n]*?)\s*(?:{CUR_PREFIX})\s*({NUM})'
-    # Use re.findall and take the LAST match if there are multiple occurrences
-    # or ensure the regex is strict enough to find only the summary line
     matches = re.findall(pattern, text, re.IGNORECASE)
+    
     if matches:
-        return clean_number(matches[-1]) # Usually the summary is at the bottom
+        # If regex has one capturing group, matches is a list of strings.
+        # If it has multiple, it's a list of tuples. 
+        # We access the last match found in the document.
+        last_match = matches[-1]
+        if isinstance(last_match, tuple):
+            return clean_number(last_match[-1])
+        return clean_number(last_match)
     return None
-
 
 def extract_invoice_no(text: str) -> Optional[str]:
-    patterns = [
-        r'(?:Invoice\s*(?:No|Number|#)\.?|Inv\.?\s*No\.?|Bill\s*No\.?|Ref(?:erence)?\.?(?:\s*No\.?)?)\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9/\-]{2,})',
-    ]
-    for p in patterns:
-        m = re.search(p, text, re.IGNORECASE)
-        if m:
-            val = m.group(1).strip()
-            val = re.sub(r'[.,;]+$', '', val)
-            return val
-    return None
-
+    pattern = r'(?:Invoice\s*(?:No|Number|#)\.?|Inv\.?\s*No\.?|Bill\s*No\.?|Ref(?:erence)?\.?(?:\s*No\.?)?)\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9/\-]{2,})'
+    m = re.search(pattern, text, re.IGNORECASE)
+    return m.group(1).strip().rstrip(".,;") if m else None
 
 def extract_date(text: str) -> Optional[str]:
     patterns = [
@@ -72,77 +63,33 @@ def extract_date(text: str) -> Optional[str]:
     for p in patterns:
         m = re.search(p, text, re.IGNORECASE)
         if m:
-            raw = m.group(1)
             try:
-                dt = dateparser.parse(raw, dayfirst=True, yearfirst=('-' in raw and raw.index('-') < 4))
+                dt = dateparser.parse(m.group(1), dayfirst=True)
                 return dt.strftime('%Y-%m-%d')
-            except (ValueError, OverflowError):
-                continue
+            except: continue
     return None
-
 
 def extract_vendor(text: str) -> Optional[str]:
     m = re.search(r'(?:Vendor|Sold\s*By|From|Supplier|Company)\s*[:\-]\s*([^\n]+)', text, re.IGNORECASE)
-    if m:
-        return m.group(1).strip()
-
-    first_line = text.strip().splitlines()[0].strip() if text.strip() else ""
-    if first_line:
-        for sep in ['—', ' - ', '–']:
-            if sep in first_line:
-                candidate = first_line.split(sep)[0].strip()
-                if candidate and not re.match(r'^(invoice|tax invoice|bill)$', candidate, re.IGNORECASE):
-                    return candidate
-        if not re.match(r'^(invoice|tax invoice|bill)\b', first_line, re.IGNORECASE):
-            return first_line
-    return None
-
+    return m.group(1).strip() if m else None
 
 def extract_currency(text: str) -> Optional[str]:
-    m = re.search(r'Currency\s*[:\-]\s*([A-Za-z]{3})', text, re.IGNORECASE)
-    if m:
-        return m.group(1).upper()
-    if re.search(r'Rs\.?|₹|INR', text):
-        return 'INR'
-    if re.search(r'\$|USD', text):
-        return 'USD'
-    if re.search(r'€|EUR', text):
-        return 'EUR'
-    if re.search(r'£|GBP', text):
-        return 'GBP'
+    if re.search(r'Rs\.?|₹|INR', text, re.IGNORECASE): return 'INR'
+    if re.search(r'\$|USD', text, re.IGNORECASE): return 'USD'
+    if re.search(r'€|EUR', text, re.IGNORECASE): return 'EUR'
+    if re.search(r'£|GBP', text, re.IGNORECASE): return 'GBP'
     return None
 
-
 def extract_fields(text: str) -> dict:
-    invoice_no = extract_invoice_no(text)
-    date = extract_date(text)
-    vendor = extract_vendor(text)
-    currency = extract_currency(text)
-
-    amount = find_number(text, r'Sub\s*Total|Subtotal|Net\s*Amount|Amount\s*before\s*tax')
-    tax = find_number(text, r'(?:IGST|CGST|SGST|GST|VAT|Tax)(?:\s*\(\d+%\))?')
-    total = find_number(text, r'Total\s*Due|Grand\s*Total|Total\s*Amount|Total')
-
-    if amount is None and total is not None and tax is not None:
-        amount = round(total - tax, 2)
-    if tax is None and total is not None and amount is not None:
-        tax = round(total - amount, 2)
-
     return {
-        "invoice_no": invoice_no,
-        "date": date,
-        "vendor": vendor,
-        "amount": amount,
-        "tax": tax,
-        "currency": currency,
+        "invoice_no": extract_invoice_no(text),
+        "date": extract_date(text),
+        "vendor": extract_vendor(text),
+        "amount": find_number(text, r'Sub\s*Total|Subtotal|Net\s*Amount|Amount\s*before\s*tax'),
+        "tax": find_number(text, r'IGST|CGST|SGST|GST|VAT|Tax'),
+        "currency": extract_currency(text),
     }
-
 
 @app.post("/extract")
 def extract(payload: InvoiceIn):
     return extract_fields(payload.invoice_text)
-
-
-@app.get("/")
-def root():
-    return {"status": "ok", "endpoint": "POST /extract"}

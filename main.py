@@ -38,10 +38,14 @@ CUR_PREFIX = r'(?:Rs\.?|INR|₹|\$|USD|EUR|€|GBP|£)?'
 
 
 def find_number(text: str, keywords: str) -> Optional[float]:
-    pattern = rf'(?:{keywords})\s*(?:\([^)]*\))?\s*[\.:\-\s]*\s*{CUR_PREFIX}\s*{NUM}'
-    m = re.search(pattern, text, re.IGNORECASE)
-    if m:
-        return clean_number(m.group(1))
+    # Ensure the keyword is followed by separators and then the number
+    # This prevents matching percentages or item-level numbers
+    pattern = rf'(?:{keywords})(?:[^0-9\n]*?)\s*(?:{CUR_PREFIX})\s*({NUM})'
+    # Use re.findall and take the LAST match if there are multiple occurrences
+    # or ensure the regex is strict enough to find only the summary line
+    matches = re.findall(pattern, text, re.IGNORECASE)
+    if matches:
+        return clean_number(matches[-1]) # Usually the summary is at the bottom
     return None
 
 
@@ -116,7 +120,7 @@ def extract_fields(text: str) -> dict:
     currency = extract_currency(text)
 
     amount = find_number(text, r'Sub\s*Total|Subtotal|Net\s*Amount|Amount\s*before\s*tax')
-    tax = find_number(text, r'IGST|CGST|SGST|GST|VAT|Tax')
+    tax = find_number(text, r'(?:IGST|CGST|SGST|GST|VAT|Tax)(?:\s*\(\d+%\))?')
     total = find_number(text, r'Total\s*Due|Grand\s*Total|Total\s*Amount|Total')
 
     if amount is None and total is not None and tax is not None:
